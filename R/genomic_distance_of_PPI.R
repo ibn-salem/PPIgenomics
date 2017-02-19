@@ -7,14 +7,18 @@
 
 require(stringr)        # for some string functionality
 require(biomaRt)        # to retrieve human paralogs from Ensembl
-require(BSgenome.Hsapiens.UCSC.hg19)
+require(TxDb.Hsapiens.UCSC.hg19.knownGene)
 require(ggplot2)
+require(GenomicRanges)
+require(rtracklayer)    # to parse .bed files
+require(plyr)
 
 # set some parameters:
 
 # to download thies files, run the script data/download.sh
 HIPPIE_SCORE_TH <- 0.72
 HIPPIE_FILE <- "data/HIPPIE/hippie_current.txt"
+N_RAND=10
 
 TAD_FILE <- "data/Rao2014/GSE63525_IMR90_Arrowhead_domainlist.txt.bed"
 
@@ -58,7 +62,7 @@ addPairDistKb <- function(genePairs, tssGR){
 #-------------------------------------------------------------------
 # get tssGR for ENSG
 #-------------------------------------------------------------------
-seqInfo <- seqinfo(BSgenome.Hsapiens.UCSC.hg19)
+seqInfo <- seqinfo(TxDb.Hsapiens.UCSC.hg19.knownGene)
 
 ensemblGRCh37 <- useMart(host="grch37.ensembl.org", biomart="ENSEMBL_MART_ENSEMBL",dataset="hsapiens_gene_ensembl", verbose=FALSE)
 
@@ -129,7 +133,7 @@ hippie <- hippie[hippie$score >= HIPPIE_SCORE_TH,]
 #-----------------------------------------------------------------------
 # generate random interaction network
 #-----------------------------------------------------------------------
-randNet <- hippie[rep(1:nrow(hippie), 10) ,c("g1_ENSG", "g2_ENSG", "score")]
+randNet <- hippie[rep(1:nrow(hippie), N_RAND) ,c("g1_ENSG", "g2_ENSG", "score")]
 randNet[,2] <- sample(randNet[,2])
 
 
@@ -141,6 +145,7 @@ pairsDF <- rbind(
 	randNet
 	)
 pairsDF$group <- rep(c("PPI", "shuffled"), c(nrow(hippie), nrow(randNet)))
+pairsDF$replicate <- rep(c(1, 1:N_RAND), each=nrow(hippie))
 
 message("INFO: After filtering score >= ", HIPPIE_SCORE_TH, " : ", sum(pairsDF$group == "PPI"), " and shuffled: ",sum(pairsDF$group == "shuffled"))
 
@@ -154,6 +159,12 @@ pairsDF <- addPairDistKb(pairsDF, tssGR)
 
 # filter for pairs on same chromosome (with dist != NA)
 pairsDF <- pairsDF[!is.na(pairsDF$dist),]
+
+# add distance bins
+# breaksCis <- seq(0, 1000, 50)
+breaksCis <- seq(0, 1000, 100)
+pairsDF$distBin <- as.factor(breaksCis[.bincode(pairsDF$dist, breaksCis)])
+
 
 message("INFO: After filtering out different chromosomes : ", 
         sum(pairsDF$group == "PPI"), " and shuffled: ", 
@@ -211,15 +222,12 @@ pairsGR <- getPairAsGR(pairsDF, tssGR)
 pairsDF$inTAD <- countOverlaps(pairsGR, tadGR, type="within") >= 1
 pairsDF$inTAD <- factor(pairsDF$inTAD, c(TRUE, FALSE), c("Same TAD", "Not same TAD"))
 
-
-
 #===============================================================================
 # plot geomic distance distribution
 #===============================================================================
 
 # compute p-value for distance difference between HIPPIE and shuffled
 pVal <- wilcox.test(dist ~ group, data=pairsDF)$p.value
-
 
 p <- ggplot(pairsDF, aes(dist, ..density.., fill=group, color=group)) + 
 	geom_histogram(binwidth=50, alpha=.5, position="identity") + 
@@ -230,4 +238,45 @@ ggsave(p, file=paste0(outPrefix, ".hippie_genomic_distance.v03.hist.pdf"), w=7, 
 p <- p + facet_grid(inTAD~., margins=TRUE, scales="free_y")
 ggsave(p, file=paste0(outPrefix, ".hippie_genomic_distance.v03.hist.byTAD.pdf"), w=7, h=7)
 
+#===============================================================================
+# plot percet of pairs in same TAD
+#===============================================================================
+
+repDF <- ddply(pairsDF, .(group, replicate), summarize, 
+               N = length(inTAD),
+               n = sum(inTAD=="Same TAD"),
+               percent = n/N*100
+               )
+groupDF <- ddply(repDF, .(group), summarize,
+                 mean = mean(percent),
+                 sd = sd(percent)
+                 )
+
+pval <- fisher.test(pairsDF$inTAD, pairsDF$group)$p.value
+
+p <- ggplot(groupDF, aes(x=group, y=mean, ymax=mean+sd, ymin=mean-sd, fill=group)) + 
+  geom_errorbar(width=.25) + 
+  geom_bar(stat="identity", color="black") + 
+  geom_text(aes(label=round(mean, 2)), vjust=1.5) + 
+  geom_text(aes(y=1.1*max(mean), x=1.5, label=paste0("p=", signif(pval, 3)))) + 
+  labs(x="", y="Gene pairs in same TAD [%]")  + 
+  theme_bw()
+ggsave(p, file=paste0(outPrefix, ".hippie_genomic_distance.v03.inTAD_by_group.barplot.pdf"), w=3.7, h=7)
+
+#===============================================================================
+# plot percet of pairs in same TAD by distance bins
+#===============================================================================
+
+binDF <- ddply(pairsDF, .(group, distBin), summarize, 
+               N = length(inTAD),
+               n = sum(inTAD=="Same TAD"),
+               percent = n/N*100
+)
+
+
+p <- ggplot(binDF, aes(x=distBin, y=percent, fill=group, color=group)) + 
+    geom_bar(stat="identity", position="dodge", alpha=.5) + 
+    labs(x="Genomic distance [kb]", y="Gene pairs in same TAD [%]")  + 
+    theme_bw()
+ggsave(p, file=paste0(outPrefix, ".hippie_genomic_distance.v03.inTAD_by_distBin.barplot.pdf"), w=7, h=3.5)
 
