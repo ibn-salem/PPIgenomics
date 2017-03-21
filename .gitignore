@@ -6,6 +6,4 @@
 # ignore data files and results for git sync
 data/HIPPIE/*
 data/Rao2014/*
-results
 results/*
-

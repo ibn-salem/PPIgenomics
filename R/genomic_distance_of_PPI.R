@@ -18,11 +18,11 @@ require(plyr)
 # to download thies files, run the script data/download.sh
 HIPPIE_SCORE_TH <- 0.72
 HIPPIE_FILE <- "data/HIPPIE/hippie_current.txt"
-N_RAND=10
+N_RAND = 10
 
 TAD_FILE <- "data/Rao2014/GSE63525_IMR90_Arrowhead_domainlist.txt.bed"
 
-outPrefix <- "resutls/PPI_genomics"
+outPrefix <- "results/PPI_genomics"
 
 # create directory, if not exist
 dir.create(dirname(outPrefix), recursive=TRUE, showWarnings = FALSE)
